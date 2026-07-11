@@ -418,7 +418,12 @@ $('#btn-entrar').addEventListener('click', () => {
 $('#btn-go-login').onclick = () => switchView('login');
 $('#btn-back-catalogo').onclick = () => switchView('catalogo');
 $('#btn-ver-loja').onclick = () => switchView('catalogo');
-$('#btn-sair').onclick = () => switchView('catalogo');
+$('#btn-sair').onclick = () => {
+  // Limpa campos de login
+  $('#login-email').value = '';
+  $('#login-senha').value = '';
+  switchView('catalogo');
+};
 
 // ============================================================
 // Carrinho e Checkout
