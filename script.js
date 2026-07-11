@@ -1,11 +1,18 @@
 // ============================================================
 // Configurações Gerais da Loja
 // ============================================================
+// Configuração JSONBin
+const JSONBIN_ID = '6a524527f5f4af5e2980e48d';
+const JSONBIN_KEY = '$2a$10$m1Tbl0nrbhgOXHiczPRE/.YUZb.yHqqkS0Cz9P0DUxt4xQBeZpmVu';
+const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_ID}`;
+
 const STORE = {
   name: 'Boticário da Selma',
   brand: 'O Boticário',
   whatsapp: '5581983439253'
 };
+
+
 
 let PRODUCTS = [
   {
@@ -44,7 +51,6 @@ let CATEGORIES = [
   { id: 'kits', name: 'Kits' }
 ];
 
-
 // Helpers de Seleção e Formatação
 const formatBRL = (n) => Number(n).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const effectivePrice = (p) => (p.promotion_price && p.promotion_price > 0 ? p.promotion_price : p.price);
@@ -55,7 +61,7 @@ function escapeHTML(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
 
-let cart = JSON.parse(localStorage.getItem('cart') || '[]');
+let cart = []; 
 let currentFilter = 'all';
 let currentCategory = 'all';
 let searchQuery = '';
@@ -63,6 +69,53 @@ let adminSearchQuery = '';
 let uploadedImageBase64 = null;
 
 function saveCart() { localStorage.setItem('cart', JSON.stringify(cart)); }
+
+// ============================================================
+// PERSISTÊNCIA VIA JSONBIN (NUVEM) - NOVO!
+// ============================================================
+async function loadData() {
+  try {
+    const res = await fetch(JSONBIN_URL, {
+      headers: { 'X-Master-Key': JSONBIN_KEY }
+    });
+    if (!res.ok) throw new Error('Erro ao carregar dados da nuvem');
+    const data = await res.json();
+    PRODUCTS = data.record.products;
+    CATEGORIES = data.record.categories;
+    // Atualiza também o cache local
+    localStorage.setItem('boticario_products', JSON.stringify(PRODUCTS));
+    localStorage.setItem('boticario_categories', JSON.stringify(CATEGORIES));
+  } catch (err) {
+    console.warn('Offline ou erro na API, usando cache local:', err);
+    const savedProducts = localStorage.getItem('boticario_products');
+    const savedCategories = localStorage.getItem('boticario_categories');
+    if (savedProducts) PRODUCTS = JSON.parse(savedProducts);
+    if (savedCategories) CATEGORIES = JSON.parse(savedCategories);
+  }
+}
+
+async function saveData() {
+  const body = { products: PRODUCTS, categories: CATEGORIES };
+  try {
+    await fetch(JSONBIN_URL, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Master-Key': JSONBIN_KEY
+      },
+      body: JSON.stringify(body)
+    });
+    // Atualiza cache local
+    localStorage.setItem('boticario_products', JSON.stringify(PRODUCTS));
+    localStorage.setItem('boticario_categories', JSON.stringify(CATEGORIES));
+  } catch (err) {
+    console.error('Erro ao salvar online:', err);
+    // Mesmo offline, salva localmente para não perder
+    localStorage.setItem('boticario_products', JSON.stringify(PRODUCTS));
+    localStorage.setItem('boticario_categories', JSON.stringify(CATEGORIES));
+    alert('Sem conexão no momento. Os dados foram salvos localmente e serão sincronizados quando houver internet.');
+  }
+}
 
 // ============================================================
 // Renderização Pública (Catálogo)
@@ -135,117 +188,27 @@ function cardHTML(p) {
 // ============================================================
 // FUNÇÃO DE RENDERIZAÇÃO DAS CATEGORIAS (Atualizada)
 // ============================================================
-  function renderCategoryBars() {
-    const catBar = $('.category-bar');
-      if (catBar) {
-      // Renderiza a barra pública usando o ícone '✦' para todas as opções
-      catBar.innerHTML = `<button data-cat="all" class="cat-link ${currentCategory === 'all' ? 'active' : ''}">✦ Todos</button>` + 
-        CATEGORIES.map(c => `<button data-cat="${c.id}" class="cat-link ${currentCategory === c.id ? 'active' : ''}">✦ ${c.name}</button>`).join('');
-    
-      // Readiciona os cliques dos botões da categoria pública
-      $$('.category-bar .cat-link').forEach(btn => {
-        btn.onclick = () => {
-          $$('.category-bar .cat-link').forEach(b => b.classList.remove('active'));
-          btn.classList.add('active');
-          currentCategory = btn.dataset.cat;
-          renderProducts();
+function renderCategoryBars() {
+  const catBar = $('.category-bar');
+  if (catBar) {
+    catBar.innerHTML = `<button data-cat="all" class="cat-link ${currentCategory === 'all' ? 'active' : ''}">✦ Todos</button>` + 
+      CATEGORIES.map(c => `<button data-cat="${c.id}" class="cat-link ${currentCategory === c.id ? 'active' : ''}">✦ ${c.name}</button>`).join('');
+  
+    $$('.category-bar .cat-link').forEach(btn => {
+      btn.onclick = () => {
+        $$('.category-bar .cat-link').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentCategory = btn.dataset.cat;
+        renderProducts();
       };
-      });
-    }
+    });
+  }
 
-  // Atualiza também o menu select do formulário de produtos no Admin
   const selectCat = $('#prod-categoria');
   if (selectCat) {
     selectCat.innerHTML = CATEGORIES.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
   }
 }
-
-// ============================================================
-// INICIALIZAÇÃO DOS BOTÕES DE ADICIONAR E REMOVER CATEGORIA
-// ============================================================
-  document.addEventListener("DOMContentLoaded", () => {
-  
-  // Lógica para ADICIONAR Categoria
-  const btnAddCat = $('#btn-add-categoria');
-  if (btnAddCat) {
-    btnAddCat.onclick = () => {
-      let nome = prompt("Digite o nome da nova categoria:");
-      if (!nome || nome.trim() === "") return;
-      
-      // Gera um ID limpo (sem acentos ou espaços) para usar no sistema
-      let id = nome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, "-");
-      
-      // Evita duplicados
-      if (CATEGORIES.some(c => c.id === id)) {
-        alert("Essa categoria já existe!");
-        return;
-      }
-
-      CATEGORIES.push({ id: id, name: nome.trim() });
-      renderCategoryBars();
-      alert(`Categoria "${nome}" adicionada com sucesso!`);
-    };
-  }
-
-  // LÓGICA NOVA: REMOVER Categoria
-  const btnRemoveCat = $('#btn-remove-categoria');
-  if (btnRemoveCat) {
-    btnRemoveCat.onclick = () => {
-      if (CATEGORIES.length === 0) {
-        alert("Não há nenhuma categoria cadastrada para remover!");
-        return;
-      }
-
-      // Monta uma lista de texto numerada com as categorias atuais
-      let listaTexto = CATEGORIES.map((c, index) => `${index + 1}. ${c.name}`).join("\n");
-      let escolha = prompt(`Digite o número da categoria que deseja REMOVER:\n\n${listaTexto}`);
-      
-      if (!escolha) return; // Cancelou ou digitou vazio
-
-      let indiceSelecionado = parseInt(escolha) - 1;
-
-      // Valida se o número digitado existe na lista
-      if (isNaN(indiceSelecionado) || indiceSelecionado < 0 || indiceSelecionado >= CATEGORIES.length) {
-        alert("Número inválido! Tente novamente.");
-        return;
-      }
-
-      let categoriaParaRemover = CATEGORIES[indiceSelecionado];
-
-      // Pede uma confirmação final para não apagar sem querer
-      if (confirm(`Tem certeza que deseja apagar a categoria "${categoriaParaRemover.name}"?\nOs produtos dessa categoria voltarão para a categoria geral.`)) {
-        
-        // Se algum produto usava essa categoria, joga ele de volta para "perfumes" ou limpa
-        PRODUCTS.forEach(p => {
-          if (p.category === categoriaParaRemover.id) {
-            p.category = 'perfumes'; // Categoria padrão de segurança
-          }
-        });
-
-        // Remove do Array de categorias
-        CATEGORIES.splice(indiceSelecionado, 1);
-
-        // Atualiza tudo na tela instantaneamente
-        renderCategoryBars();
-        renderProducts();
-        if ($('#stat-produtos')) updateAdminDashboard();
-
-        alert("Categoria removida com sucesso!");
-      }
-    };
-  }
-
-  // Rodar a renderização inicial ao abrir a página
-  renderCategoryBars();
-  renderProducts();
-});
-
-  // Atualiza também o menu select do formulário de produtos no Admin
-  const selectCat = $('#prod-categoria');
-  if (selectCat) {
-    selectCat.innerHTML = CATEGORIES.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-  }
-
 
 // ============================================================
 // Painel Administrativo Interno
@@ -320,7 +283,8 @@ function openEditForm(id) {
   uploadedImageBase64 = p.image_url;
 }
 
-function cloneProduct(id) {
+// Modificada para salvar automaticamente
+async function cloneProduct(id) {
   const p = PRODUCTS.find(x => x.id === id);
   if (!p) return;
   
@@ -332,23 +296,27 @@ function cloneProduct(id) {
   };
   
   PRODUCTS.push(cloned);
+  await saveData();  // <-- SALVA NA NUVEM
   toast("Produto clonado!");
   updateAdminDashboard();
   renderProducts();
 }
 
-function deleteProduct(id) {
+// Modificada para salvar automaticamente
+async function deleteProduct(id) {
   if (confirm("Deseja remover este produto?")) {
     PRODUCTS = PRODUCTS.filter(p => p.id !== id);
     cart = cart.filter(item => item.id !== id);
     saveCart();
+    await saveData();  // <-- SALVA NA NUVEM
     renderProducts();
     updateAdminDashboard();
     toast("Removido com sucesso!");
   }
 }
 
-$('#form-produto').addEventListener('submit', (e) => {
+// Modificado para salvar automaticamente
+$('#form-produto').addEventListener('submit', async (e) => {
   e.preventDefault();
   const idValue = $('#prod-id').value;
   
@@ -377,6 +345,8 @@ $('#form-produto').addEventListener('submit', (e) => {
     PRODUCTS.push({ id: newId, ...data });
     toast("Cadastrado!");
   }
+
+  await saveData();  // <-- SALVA NA NUVEM
 
   $('#form-produto').reset();
   uploadedImageBase64 = null;
@@ -521,8 +491,13 @@ function toast(msg) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, 2000);
 }
 
-// Escuta de Eventos ao Iniciar
-document.addEventListener('DOMContentLoaded', () => {
+// ============================================================
+// Escuta de Eventos ao Iniciar (UNIFICADO)
+// ============================================================
+document.addEventListener('DOMContentLoaded', async () => {
+  // Carrega dados da nuvem (ou cache local) antes de tudo
+  await loadData();
+
   // Inicializações fundamentais
   renderCategoryBars();
   renderProducts();
@@ -549,13 +524,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  // Ação de Clique do Botão de Adicionar Categoria solicitado
-  $('#btn-add-categoria').onclick = () => {
+  // Botão ADICIONAR Categoria (agora com saveData)
+  $('#btn-add-categoria').onclick = async () => {
     const name = prompt("Digite o nome da nova categoria:");
     if (!name || name.trim() === "") return;
     
     const cleanName = name.trim();
-    // Gera uma ID amigável sem acentos ou caracteres especiais
     const id = cleanName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "-");
     
     if (CATEGORIES.some(c => c.id === id)) {
@@ -564,10 +538,51 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     CATEGORIES.push({ id, name: cleanName });
-    renderCategoryBars(); // Atualiza as telas na hora
+    await saveData();  // <-- SALVA NA NUVEM
+    renderCategoryBars();
     toast(`Categoria "${cleanName}" criada!`);
   };
 
+  // Botão REMOVER Categoria (agora com saveData)
+  $('#btn-remove-categoria').onclick = async () => {
+    if (CATEGORIES.length === 0) {
+      alert("Não há nenhuma categoria cadastrada para remover!");
+      return;
+    }
+
+    let listaTexto = CATEGORIES.map((c, index) => `${index + 1}. ${c.name}`).join("\n");
+    let escolha = prompt(`Digite o número da categoria que deseja REMOVER:\n\n${listaTexto}`);
+    
+    if (!escolha) return;
+
+    let indiceSelecionado = parseInt(escolha) - 1;
+
+    if (isNaN(indiceSelecionado) || indiceSelecionado < 0 || indiceSelecionado >= CATEGORIES.length) {
+      alert("Número inválido! Tente novamente.");
+      return;
+    }
+
+    let categoriaParaRemover = CATEGORIES[indiceSelecionado];
+
+    if (confirm(`Tem certeza que deseja apagar a categoria "${categoriaParaRemover.name}"?\nOs produtos dessa categoria voltarão para a categoria geral.`)) {
+      PRODUCTS.forEach(p => {
+        if (p.category === categoriaParaRemover.id) {
+          p.category = 'perfumes';
+        }
+      });
+
+      CATEGORIES.splice(indiceSelecionado, 1);
+
+      await saveData();  // <-- SALVA NA NUVEM
+      renderCategoryBars();
+      renderProducts();
+      if ($('#stat-produtos')) updateAdminDashboard();
+
+      alert("Categoria removida com sucesso!");
+    }
+  };
+
+  // Filtros
   $$('#filters .chip').forEach(btn => {
     btn.onclick = () => {
       $$('#filters .chip').forEach(b => b.classList.remove('active'));
